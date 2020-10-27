@@ -34,6 +34,7 @@ class NetworkEnv():
         self.alpha = alpha
         self.beta = beta
         self.T_max = T_max
+        self.ACTION = {0:-1, 1:1}
         # self.length_Pe = len(Pe)
         # self.length_Pc = len(Pc)
         # self.length_Task_coef = len(Task_coef)
@@ -56,7 +57,7 @@ class NetworkEnv():
         #     self.task_remain[u] += new_task[i]
         self.create_new_task()
 
-        obs = [[self.task_remain[i], self.Pe, self.x[i]] for i in range(NUM_UE)]
+        obs = [[self.task_remain[i], np.array([0.3 for i in range(NUM_UE)]), np.array([0.4 for i in range(NUM_UE)]), self.x[i]] for i in range(NUM_UE)]
         return obs
 
 
@@ -155,12 +156,18 @@ class NetworkEnv():
             self.task_remain[u] += new_task[i]
 
     def step(self, actions):
+        for i in range(NUM_UE):
+            self.x[i] += self.ACTION[actions[i]] * 0.1
+            if self.x[i] > 1:
+                self.x[i] = 1
+            if self.x[i] < 0:
+                self.x[i] = 0
         self.create_new_task()
         He = abs(1 / np.sqrt(2) * (np.random.randn(NUM_Channel, NUM_UE) + 1j * np.random.randn(NUM_Channel, NUM_UE)))  # 边缘
         Hc = 0.1 * abs(1 / np.sqrt(2) * (np.random.randn(NUM_Channel, NUM_UE) + 1j * np.random.randn(NUM_Channel, NUM_UE)))  # 云
         rate_edge, rate_cloud = self.sum_rate(self.UE_Channel_matrix, He, Hc, np.array([0.3 for i in range(NUM_UE)]), np.array([0.4 for i in range(NUM_UE)]), B, var_noise)
         for i in range(NUM_UE):
-            offloaded_data = (rate_cloud[i].sum() + rate_edge[i].sum()) * DELTA_T
+            offloaded_data = (self.x[i] * rate_cloud[i].sum() + (1 - self.x[i]) * rate_edge[i].sum()) * DELTA_T
             self.task_remain[i] -= offloaded_data
             if self.task_remain[i] < 0:
                 self.task_remain[i] = 0
@@ -185,7 +192,8 @@ if __name__ == '__main__':
     env = NetworkEnv(0.3, 0.4, 10**14, 10**15, 10**8, 10**(-46), 8)
     env.reset(UE_Channel_matrix)
     for i in range(1000):
-        action = [random.random() for i in range(NUM_UE)]
+        # action = [random.random() for i in range(NUM_UE)]
+        action = np.random.randint(low=0, high=1, size=NUM_UE)
         state, reward, done, info = env.step(action)
         # print(reward)
 
