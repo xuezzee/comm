@@ -1,14 +1,21 @@
 from Senv import env_network
 import numpy as np
 import random
-NUM_UE = 50
+from gym.spaces import Box, Discrete
+NUM_UE = 10
 NUM_Channel = 25
 LAMBDA = 5
 NEW_TASK_MEAN = 10000
-NEW_TASK_VAR = 1000
-He =  abs(1 / np.sqrt(2) * (np.random.randn(NUM_Channel,NUM_UE) + 1j * np.random.randn(NUM_Channel,NUM_UE)))# 边缘
-Hc =  0.1*abs(1 / np.sqrt(2) * (np.random.randn(NUM_Channel,NUM_UE) + 1j * np.random.randn(NUM_Channel,NUM_UE)))# 云
-
+NEW_TASK_VAR = 100
+He =  abs(1 / np.sqrt(2) * (np.random.randn(NUM_Channel,NUM_UE) + 1j * np.random.randn(NUM_Channel,NUM_UE)))
+Hc =  0.1*abs(1 / np.sqrt(2) * (np.random.randn(NUM_Channel,NUM_UE) + 1j * np.random.randn(NUM_Channel,NUM_UE)))
+UE_Channel_matrix = np.zeros((NUM_Channel, NUM_UE))
+for j in range(NUM_UE):
+    if j < NUM_Channel:
+        UE_Channel_matrix[j, j] = 1
+    else:
+        UE_Channel_matrix[int(j - NUM_Channel), j] = 1
+UE_Channel_matrix = np.array(UE_Channel_matrix)
 # # 存储
 # save_fn = 'Data_He.mat'
 # sio.savemat(save_fn,{'He': He})
@@ -25,43 +32,34 @@ DELTA_T = 0.00001
 
 
 class NetworkEnv():
-    def __init__(self, Pe, Pc, fe, fc, alpha, beta, T_max):
+    def __init__(self, fe, fc, alpha, beta, T_max):
         # self.Task_coef = Task_coef
-        self.Pe = Pe
-        self.Pc = Pc
         self.fe = fe
         self.fc = fc
         self.alpha = alpha
         self.beta = beta
         self.T_max = T_max
         self.ACTION = {0:-1, 1:1}
-        # self.length_Pe = len(Pe)
-        # self.length_Pc = len(Pc)
-        # self.length_Task_coef = len(Task_coef)
-        # self.action_space = np.arange(
-        # self.length_Pe * self.length_Pc * self.length_Task_coef)  # dimension of one user action
 
-    def reset(self, UE_Channel_matrix):
+    def reset(self):
         self.x = np.zeros(NUM_UE)
+        self.p = np.zeros(NUM_UE)
+        self.p = np.zeros(NUM_UE)
         self.n_step = 0
         self.task_remain = np.zeros(NUM_UE)
         self.UE_Channel_matrix = UE_Channel_matrix
-        # task_num = np.random.poisson(lam=25, size=1)[0]
-        # new_task_users = np.random.choice(a=50, size=task_num, replace=False, p=None)
-        # new_task = np.zeros(task_num)
-        # for i in range(task_num):
-        #     # temp = random.normalvariate(1000, 100)
-        #     new_task[i] += random.normalvariate(1000000, 100)
-        # for i in range(task_num):
-        #     u = new_task_users[i]
-        #     self.task_remain[u] += new_task[i]
         self.create_new_task()
-
-        obs = [[self.task_remain[i], np.array([0.3 for i in range(NUM_UE)]), np.array([0.4 for i in range(NUM_UE)]), self.x[i]] for i in range(NUM_UE)]
+        self.He = abs(1 / np.sqrt(2) * (np.random.randn(NUM_Channel, NUM_UE) + 1j * np.random.randn(NUM_Channel, NUM_UE)))  # 边缘
+        self.Hc = 0.1 * abs(1 / np.sqrt(2) * (np.random.randn(NUM_Channel, NUM_UE) + 1j * np.random.randn(NUM_Channel, NUM_UE)))  # 云
+        obs = [np.concatenate([self.task_remain[i].reshape(-1), self.He.T[i].reshape(-1), self.Hc.T[i].reshape(-1)]) for i in range(NUM_UE)]
         return obs
 
 
     def sum_rate(self, UE_Channel_matrix, He, Hc, pe, pc, B, var_noise):
+        pe = np.array(pe)
+        pc = np.array(pc)
+        He = np.array(He)
+        Hc = np.array(Hc)
         rate_edge = np.zeros((NUM_Channel,NUM_UE))
         rate_cloud = np.zeros((NUM_Channel,NUM_UE))
         # 边缘网络
@@ -142,11 +140,15 @@ class NetworkEnv():
             else:
                 reward[j] = 1/E[j]
 
+        # print(E)
+
         return reward, E, T
 
     def create_new_task(self):
         task_num = np.random.poisson(lam=LAMBDA, size=1)[0]
-        new_task_users = np.random.choice(a=50, size=task_num, replace=False, p=None)
+        if task_num > NUM_UE:
+            task_num = NUM_UE
+        new_task_users = np.random.choice(a=NUM_UE, size=task_num, replace=False, p=None)
         new_task = np.zeros(task_num)
         for i in range(task_num):
             # temp = random.normalvariate(1000, 100)
@@ -156,28 +158,40 @@ class NetworkEnv():
             self.task_remain[u] += new_task[i]
 
     def step(self, actions):
+        x = [np.clip(i[0], a_min=0, a_max=1) for i in actions]
+        Pe = [np.clip(i[1], a_min=0, a_max=1) for i in actions]
+        Pc = [np.clip(i[2], a_min=0, a_max=1) for i in actions]
+        rate_edge, rate_cloud = self.sum_rate(self.UE_Channel_matrix, self.He, self.Hc, Pe, Pc, B, var_noise)
+        offloaded_data = np.zeros_like(self.task_remain)
         for i in range(NUM_UE):
-            self.x[i] += self.ACTION[actions[i]] * 0.1
-            if self.x[i] > 1:
-                self.x[i] = 1
-            if self.x[i] < 0:
-                self.x[i] = 0
-        self.create_new_task()
-        He = abs(1 / np.sqrt(2) * (np.random.randn(NUM_Channel, NUM_UE) + 1j * np.random.randn(NUM_Channel, NUM_UE)))  # 边缘
-        Hc = 0.1 * abs(1 / np.sqrt(2) * (np.random.randn(NUM_Channel, NUM_UE) + 1j * np.random.randn(NUM_Channel, NUM_UE)))  # 云
-        rate_edge, rate_cloud = self.sum_rate(self.UE_Channel_matrix, He, Hc, np.array([0.3 for i in range(NUM_UE)]), np.array([0.4 for i in range(NUM_UE)]), B, var_noise)
-        for i in range(NUM_UE):
-            offloaded_data = (self.x[i] * rate_cloud[i].sum() + (1 - self.x[i]) * rate_edge[i].sum()) * DELTA_T
-            self.task_remain[i] -= offloaded_data
+            offloaded_data[i] = (x[i] * rate_cloud[i].sum() + (1 - x[i]) * rate_edge[i].sum()) * DELTA_T
+            self.task_remain[i] -= offloaded_data[i]
             if self.task_remain[i] < 0:
                 self.task_remain[i] = 0
 
-        print("task_remain:", self.task_remain)
+        # print("task_remain:", self.task_remain)
         # print("channel gain:", He)
-        reward, _, _ = self.compute_reward(self.UE_Channel_matrix, actions, np.array([0.3 for i in range(NUM_UE)]), np.array([0.4 for i in range(NUM_UE)]), self.task_remain)
+        # reward, _, _ = self.compute_reward(self.UE_Channel_matrix, x, Pe, Pc, offloaded_data)
+        reward = offloaded_data
+        # print(self.task_remain)
+        self.create_new_task()
         self.n_step += 1
-        obs = [[self.task_remain[i], np.array([0.3 for i in range(NUM_UE)]), np.array([0.4 for i in range(NUM_UE)]), self.x[i]] for i in range(NUM_UE)]
-        return obs, reward, False, None
+        self.He = abs(1 / np.sqrt(2) * (np.random.randn(NUM_Channel, NUM_UE) + 1j * np.random.randn(NUM_Channel, NUM_UE)))  # 边缘
+        self.Hc = 0.1 * abs(1 / np.sqrt(2) * (np.random.randn(NUM_Channel, NUM_UE) + 1j * np.random.randn(NUM_Channel, NUM_UE)))  # 云
+        obs = [np.concatenate([self.task_remain[i].reshape(-1), self.He.T[i].reshape(-1), self.Hc.T[i].reshape(-1)]) for i in range(NUM_UE)]
+        return obs, reward, [False for i in range(NUM_UE)], None
+
+    @property
+    def observation_space(self):
+        return [Box(low=-float("inf"), high=float("inf"), shape=(51,)) for i in range(NUM_UE)]
+
+    @property
+    def action_space(self):
+        return [Box(low=0, high=1, shape=(3,)) for i in range(NUM_UE)]
+
+    @property
+    def agents(self):
+        return ["agent" for i in range(NUM_UE)]
 
 
 
@@ -189,11 +203,10 @@ if __name__ == '__main__':
         else:
             UE_Channel_matrix[int(j - NUM_Channel), j] = 1
     UE_Channel_matrix = np.array(UE_Channel_matrix)
-    env = NetworkEnv(0.3, 0.4, 10**14, 10**15, 10**8, 10**(-46), 8)
-    env.reset(UE_Channel_matrix)
+    env = NetworkEnv(10**14, 10**15, 10**8, 10**(-46), 8)
+    env.reset()
     for i in range(1000):
         # action = [random.random() for i in range(NUM_UE)]
-        action = np.random.randint(low=0, high=1, size=NUM_UE)
+        action = {"x": np.random.random(NUM_UE), "Pe": np.random.random(NUM_UE), "Pc":np.random.random(NUM_UE)}
         state, reward, done, info = env.step(action)
-        # print(reward)
 
